@@ -24,17 +24,20 @@
 #include <sstream>
 #include <stdlib.h>
 #include <time.h>
+#include <stdlib.h>
 
 const char* g_FilterWheelDeviceName = "FW103H Filter Wheel";
 const char* g_SerialNumberProp = "Serial Number";
 const char* g_Keyword_Position = "Set filter wheel position (degrees)";
 const char* g_Keyword_FilterPosition = "Set filter wheel position (0-5)";
 
-const int g_default_maxSpeed = 7200;
+const int g_default_max_speed_dps = 7200;
 const int g_move_timeout = 5000;  // timeout in ms for moving wheel positions
 const double g_real_to_device_units = 7.0/9.0 + 1137;
 const int g_max_angle_degrees = 360;
 const int g_max_angle_devunits = 360 * g_real_to_device_units;
+const double g_max_angle_error = 1.0;
+const double g_max_speed_error = 10;
 
 ///////////////////////////////////////////////////////////////////////////////
 // Exported MMDevice API
@@ -78,7 +81,7 @@ ThorlabsFilterWheel::ThorlabsFilterWheel() ://char* SerialNumber) :
    changedTime_(0.0),
    position_(0),
    homed_(false),
-   maxSpeed_(g_default_maxSpeed)
+   maxSpeed_(g_default_max_speed_dps)
 {
    InitializeDefaultErrorMessages();
    // set device specific error messages
@@ -112,7 +115,7 @@ int ThorlabsFilterWheel::Initialize()
 	// define error text
 	SetErrorText(ERR_HOME_TIMEOUT, "Device timed-out: no response received within expected time interval after homing.");
 	SetErrorText(ERR_MOVE_TIMEOUT, "Device timed-out: no response received within expected time interval after moving.");
-	
+	SetErrorText(ERR_MOVE_BAD_ANGLE, "Device failed to move to desired position by at least the maxmimum angle error.");
 	// set property list
 	// -----------------
 
@@ -142,7 +145,7 @@ int ThorlabsFilterWheel::Initialize()
 	// State
 	// -----
 	CPropertyAction* pAct = new CPropertyAction (this, &ThorlabsFilterWheel::OnState);
-	ret = CreateProperty(g_Keyword_FilterPosition, "0", MM::Integer, false, pAct);
+	ret = CreateProperty(MM::g_Keyword_State, "0", MM::Integer, false, pAct);
 	if (ret != DEVICE_OK)
 		return ret;
 
@@ -232,11 +235,8 @@ int ThorlabsFilterWheel::OnPosition(MM::PropertyBase* pProp, MM::ActionType eAct
 {
     if (eAct == MM::BeforeGet)
     {
-        double pos;
-        int ret = SBC_GetPositionCounter(serialNumber_.c_str(), pos);
+        double pos = SBC_GetPositionCounter(serialNumber_.c_str(), 1);
 		pos *= g_real_to_device_units;
-        if (ret != DEVICE_OK)
-            return ret;
 
         pProp->Set(pos);
     }
@@ -293,20 +293,29 @@ int ThorlabsFilterWheel::OnSpeed(MM::PropertyBase* pProp, MM::ActionType eAct)
 {
    if (eAct == MM::BeforeGet)
    {
-      pProp->Set((long)speed_);
+	  // get actual speed from device
+	  double speed_from_dev = Kinesis_API::GetSpeed(serialNumber_.c_str());
+	  pProp->Set((long)speed_from_dev);
+	  // CDeviceUtils::ConvertToString((int)speed_from_dev);
+	  if (abs(speed_from_dev - speed_) > g_max_speed_error){
+		  LogMessage("WARNING: Filter wheel speed detected a different value (" 
+			+ std::to_string((long long)speed_from_dev) + ") to the value previously set in micro-manager ("
+			+ std::to_string((long long)speed_) + ")");
+	  }
+	  pProp->Set((long)speed_);
    }
    else if (eAct == MM::AfterSet)
    {
       long speed;
       pProp->Get(speed);
-      if (speed < 0 || speed > g_default_maxSpeed)
+      if (speed < 0 || speed > g_default_max_speed_dps)
       {
          pProp->Set((long)speed_); // revert
          return ERR_INVALID_SPEED;
       }
       // do actual speed change here!
       //
-	  int ret = Kinesis_API::SetSpeed(serialNumber_.c_str(), speed);
+	  int ret = Kinesis_API::SetSpeed(serialNumber_.c_str(), speed*g_real_to_device_units);
 	  if (ret != 0){ // error handling for speed change not implemented yet
 		  LogMessage("Failed to set speed with error code " + std::to_string((long long)ret));
 		  return ret;
@@ -440,6 +449,7 @@ int __cdecl Kinesis_API::Home(const char* serialNumber){
    return 0;
 }
 
+// REMOVE THIS SOON ////////////////
 int __cdecl Kinesis_API::SetPosition(const char* serialNumber, double position, int timeout){
    // move to position  (degrees) (channel 1)
    SBC_ClearMessageQueue(serialNumber, 1);
@@ -476,8 +486,20 @@ int __cdecl Kinesis_API::SetPosition(const char* serialNumber, double position, 
 	}
 	// get actual position
 	double pos = SBC_GetPosition(serialNumber, 1);
-	printf("Device %s moved to %d\r\n", serialNumber, (int)(pos/g_real_to_device_units) );
+	printf("Device %s moved to %d\r\n", serialNumber, round(pos/g_real_to_device_units) );
+	if( abs((pos-position)/g_real_to_device_units) > g_max_angle_error){
+		return ERR_MOVE_BAD_ANGLE;
+	}
+	
 	return DEVICE_OK;
+}
+//
+
+double __cdecl Kinesis_API::GetSpeed(const char* serialNumber){
+	int currentVelocity, currentAcceleration;
+	int ret;
+	SBC_GetVelParams(serialNumber, 1, &currentAcceleration, &currentVelocity);
+	return currentVelocity / g_real_to_device_units;
 }
 
 int __cdecl Kinesis_API::SetSpeed(const char* serialNumber, int speed){

@@ -20,6 +20,7 @@
 #define ERR_INVALID_SPEED       101
 #define ERR_MOVE_TIMEOUT        102
 #define ERR_HOME_TIMEOUT        103
+#define ERR_MOVE_BAD_ANGLE      104
 
 // CRTP
 class ThorlabsFilterWheel : public CStateDeviceBase<ThorlabsFilterWheel>
@@ -58,6 +59,7 @@ private:
 };
 
 // static class for Kinesis API commands
+// maybe actually move these to the MM class so it can use the logMessage method
 
 class Kinesis_API
 {
@@ -68,4 +70,10 @@ public:
    static int SetPosition(const char* serialNumber, double position, int timeout);
    static int SetSpeed(const char* serialNumber, int speed);
    static int SendCmd(const char* serialNumber);
+   static double GetSpeed(const char* serialNumber);
 };
+
+double round(double d)
+{
+  return floor(d + 0.5);
+}
