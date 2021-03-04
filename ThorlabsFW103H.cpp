@@ -28,9 +28,10 @@
 const char* g_FilterWheelDeviceName = "FW103H Filter Wheel";
 const char* g_SerialNumberProp = "Serial Number";
 
-const int g_default_maxSpeed = 7200;
+const int g_default_maxSpeed = 8000;
 const int g_move_timeout = 5000;  // timeout in ms for moving wheel positions
 const double g_real_to_device_units = 7.0/9.0 + 1137;
+const double g_real_to_device_speed_units = 61083.979375;
 
 ///////////////////////////////////////////////////////////////////////////////
 // Exported MMDevice API
@@ -178,6 +179,12 @@ int ThorlabsFilterWheel::Initialize()
 		printf("Failed to initialise FW103H device %s\n", serialNumber_.c_str());
 		return init_ret;
 	}
+	// Now get the current speed of the wheel
+	double init_speed = Kinesis_API::GetSpeed(serialNumber_.c_str());
+	LogMessage("Initial speed (and max speed in real units?) is " + std::to_string((long double)init_speed));
+	printf("speed: %.2f \n", init_speed);
+
+	// bother setting speed? meh
 
 	ret = UpdateStatus();
 	if (ret != DEVICE_OK)
@@ -293,7 +300,6 @@ int ThorlabsFilterWheel::OnSerialNumber(MM::PropertyBase* pProp, MM::ActionType 
 			std::string serialNumber;
             pProp->Get(serialNumber);
             serialNumber_ = serialNumber;
-
         }
 
         pProp->Get(serialNumber_);
@@ -390,6 +396,7 @@ int __cdecl Kinesis_API::Initialize(const char* serialNumber, int timeout){
 		complete = (messageType == 2 || messageId == 1);
 	  }
    }
+
    return DEVICE_OK;
 }
 
@@ -441,20 +448,33 @@ int __cdecl Kinesis_API::SetPosition(const char* serialNumber, double position, 
 	return DEVICE_OK;
 }
 
+
+double __cdecl Kinesis_API::GetSpeed(const char* serialNumber){
+   int currentVelocity, currentAcceleration;
+   int ret;
+   ret = SBC_GetVelParams(serialNumber, 1, &currentAcceleration, &currentVelocity);
+   if (ret != 0){
+	   return ret;
+   }
+   //return currentVelocity;
+   return currentVelocity/g_real_to_device_speed_units;
+}
+
 int __cdecl Kinesis_API::SetSpeed(const char* serialNumber, int speed){
    // value handling done at higher level (Thorlabs State Device)
    if(speed > 0)
    {
-         int currentVelocity, currentAcceleration;
-		 int ret, retset;
-         ret = SBC_GetVelParams(serialNumber, 1, &currentAcceleration, &currentVelocity);
-         retset = SBC_SetVelParams(serialNumber, 1, currentAcceleration, speed);
-		 if (ret){
-			 return ret;
-		 }
-		 else if (retset != 0){
-			 return retset;
-		 }
+	  speed *= g_real_to_device_speed_units;
+      int currentVelocity, currentAcceleration;
+      int ret, retset;
+	  ret = SBC_GetVelParams(serialNumber, 1, &currentAcceleration, &currentVelocity);
+	  retset = SBC_SetVelParams(serialNumber, 1, currentAcceleration, speed);
+	  if (ret){
+		return ret;
+	  }
+      else if (retset != 0){
+      return retset;
+      }
    }
    return DEVICE_OK;
 }

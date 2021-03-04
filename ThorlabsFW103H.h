@@ -65,6 +65,7 @@ public:
    static int Home(const char* serialNumber);
    static int Shutdown(const char* serialNumber);
    static int SetPosition(const char* serialNumber, double position, int timeout);
+   static double GetSpeed(const char* serialNumber);
    static int SetSpeed(const char* serialNumber, int speed);
    static int SendCmd(const char* serialNumber);
 };
