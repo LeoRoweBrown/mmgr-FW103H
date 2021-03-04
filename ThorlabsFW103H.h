@@ -42,6 +42,7 @@ public:
    int OnState(MM::PropertyBase* pProp, MM::ActionType eAct);
    int OnSpeed(MM::PropertyBase* pProp, MM::ActionType eAct);
    int OnSerialNumber(MM::PropertyBase* pProp, MM::ActionType eAct);
+   int OnPosition(MM::PropertyBase* pProp, MM::ActionType eAct);
 
 private:
    // char* serialNumber_ ;

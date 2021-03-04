@@ -27,10 +27,14 @@
 
 const char* g_FilterWheelDeviceName = "FW103H Filter Wheel";
 const char* g_SerialNumberProp = "Serial Number";
+const char* g_Keyword_Position = "Set filter wheel position (degrees)";
+const char* g_Keyword_FilterPosition = "Set filter wheel position (0-5)";
 
 const int g_default_maxSpeed = 7200;
 const int g_move_timeout = 5000;  // timeout in ms for moving wheel positions
 const double g_real_to_device_units = 7.0/9.0 + 1137;
+const int g_max_angle_degrees = 360;
+const int g_max_angle_devunits = 360 * g_real_to_device_units;
 
 ///////////////////////////////////////////////////////////////////////////////
 // Exported MMDevice API
@@ -138,9 +142,18 @@ int ThorlabsFilterWheel::Initialize()
 	// State
 	// -----
 	CPropertyAction* pAct = new CPropertyAction (this, &ThorlabsFilterWheel::OnState);
-	ret = CreateProperty(MM::g_Keyword_State, "0", MM::Integer, false, pAct);
+	ret = CreateProperty(g_Keyword_FilterPosition, "0", MM::Integer, false, pAct);
 	if (ret != DEVICE_OK)
 		return ret;
+
+	// Raw position (debugging)
+	pAct = new CPropertyAction (this, &ThorlabsFilterWheel::OnPosition);
+	ret = CreateProperty(g_Keyword_Position, CDeviceUtils::ConvertToString(0.0), MM::Float, false, pAct);
+    SetPropertyLimits(g_Keyword_Position, 0, g_max_angle_devunits);
+	
+	if (ret != DEVICE_OK)
+		return ret;
+
 
 	// Speed
 	// -----
@@ -213,6 +226,32 @@ int ThorlabsFilterWheel::Shutdown()
 ///////////////////////////////////////////////////////////////////////////////
 // Action handlers
 ///////////////////////////////////////////////////////////////////////////////
+
+// FOR DEBUGGING
+int ThorlabsFilterWheel::OnPosition(MM::PropertyBase* pProp, MM::ActionType eAct)
+{
+    if (eAct == MM::BeforeGet)
+    {
+        double pos;
+        int ret = SBC_GetPositionCounter(serialNumber_.c_str(), pos);
+		pos *= g_real_to_device_units;
+        if (ret != DEVICE_OK)
+            return ret;
+
+        pProp->Set(pos);
+    }
+    else if (eAct == MM::AfterSet)
+    {
+        // double pos;
+        // pProp->Get(pos);
+        // int ret = SetPositionUm(pos);
+        // if (ret != DEVICE_OK)
+        //    return ret;
+		return ERROR_CALL_NOT_IMPLEMENTED;
+    }
+
+    return DEVICE_OK;
+}
 
 int ThorlabsFilterWheel::OnState(MM::PropertyBase* pProp, MM::ActionType eAct)
 {
