@@ -1,2 +1,2 @@
-# mmgr-FW103
-MicroManager device adapter for FW103 filter wheel from Thorlabs
+# mmgr-FW103H
+MicroManager device adapter for FW103Hfilter wheel from Thorlabs
