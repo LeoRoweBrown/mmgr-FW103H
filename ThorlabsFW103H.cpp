@@ -429,10 +429,11 @@ int __cdecl Kinesis_API::SetPosition(const char* serialNumber, double position, 
 	// wait for a message to arrive
 	while(SBC_MessageQueueSize(serialNumber, 1) == 0)
 	{
-		if (timeoutCounter * 100 > timeout){
+		// time counter * 10ms
+		if (timeoutCounter * 10 > timeout){
 			return ERR_MOVE_TIMEOUT;
 		}
-		Sleep(100);
+		Sleep(10);
 		timeoutCounter++;
 			
 	}
@@ -442,6 +443,7 @@ int __cdecl Kinesis_API::SetPosition(const char* serialNumber, double position, 
 	SBC_GetNextMessage(serialNumber, 1, &messageType, &messageId, &messageData);
 	complete = (messageType == 2 || messageId == 1);
 	}
+	printf("Time taken to move: %d\r\n", timeoutCounter * 10); 
 	// get actual position
 	double pos = SBC_GetPosition(serialNumber, 1);
 	printf("Device %s moved to %d\r\n", serialNumber, (int)(pos/g_real_to_device_units) );
