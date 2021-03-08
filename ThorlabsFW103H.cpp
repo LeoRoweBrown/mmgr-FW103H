@@ -27,11 +27,13 @@
 
 const char* g_FilterWheelDeviceName = "FW103H Filter Wheel";
 const char* g_SerialNumberProp = "Serial Number";
+const char* g_PollProp = "Polling time (ms)";
 
 const int g_default_maxSpeed = 8000;
 const int g_move_timeout = 5000;  // timeout in ms for moving wheel positions
 const double g_real_to_device_units = 7.0/9.0 + 1137;
 const double g_real_to_device_speed_units = 61083.979375;
+const int g_default_poll = 100; // device poll time in ms
 
 ///////////////////////////////////////////////////////////////////////////////
 // Exported MMDevice API
@@ -75,6 +77,7 @@ ThorlabsFilterWheel::ThorlabsFilterWheel() ://char* SerialNumber) :
    changedTime_(0.0),
    position_(0),
    homed_(false),
+	polltime_(g_default_poll),
    maxSpeed_(g_default_maxSpeed)
 {
    InitializeDefaultErrorMessages();
@@ -82,10 +85,17 @@ ThorlabsFilterWheel::ThorlabsFilterWheel() ://char* SerialNumber) :
 
    SetErrorText(ERR_UNKNOWN_POSITION, "Invalid filter wheel position.");
    SetErrorText(ERR_INVALID_SPEED, "Invalid filter wheel speed.");
+	SetErrorText(ERR_MOVE_TIMEOUT, "Timed out during move command.");
+	SetErrorText(ERR_HOME_TIMEOUT, "Timed out during home command.");
+	SetErrorText(ERR_POLL_CHANGE_FORBIDDEN, "Poll time change forbidden");
 
-   // Serial Number (not sure if this will work)
-   CPropertyAction* pAct_sn = new CPropertyAction (this, &ThorlabsFilterWheel::OnSerialNumber);
-   CreateProperty(g_SerialNumberProp, serialNumber_.c_str(), MM::String, false, pAct_sn, true);
+   // Serial Number
+   CPropertyAction* pAct = new CPropertyAction (this, &ThorlabsFilterWheel::OnSerialNumber);
+   CreateProperty(g_SerialNumberProp, serialNumber_.c_str(), MM::String, false, pAct, true);
+
+	// Poll time
+	pAct = new CPropertyAction (this, &ThorlabsFilterWheel::OnPollTime);
+   CreateProperty(g_PollProp, CDeviceUtils::ConvertToString(polltime_), MM::Integer, false, pAct, true);
 
    EnableDelay(); // signals that the dealy setting will be used
 }
@@ -174,13 +184,13 @@ int ThorlabsFilterWheel::Initialize()
 	//////////////////////////////////
 
 	// initialise hardware
-	int init_ret = Kinesis_API::Initialize(serialNumber_.c_str(), g_move_timeout);
+	int init_ret = Kinesis_Initialize(g_move_timeout);
 	if (init_ret != DEVICE_OK){
 		printf("Failed to initialise FW103H device %s\n", serialNumber_.c_str());
 		return init_ret;
 	}
 	// Now get the current speed of the wheel
-	double init_speed = Kinesis_API::GetSpeed(serialNumber_.c_str());
+	double init_speed = Kinesis_GetSpeed();
 	LogMessage("Initial speed (and max speed in real units?) is " + std::to_string((long double)init_speed));
 	printf("speed: %.2f \n", init_speed);
 
@@ -212,7 +222,7 @@ int ThorlabsFilterWheel::Shutdown()
    {
       initialized_ = false;
       // shutdown comms to device
-	  Kinesis_API::Shutdown(serialNumber_.c_str());
+	  Kinesis_Shutdown();
    }
    return DEVICE_OK;
 }
@@ -247,11 +257,11 @@ int ThorlabsFilterWheel::OnState(MM::PropertyBase* pProp, MM::ActionType eAct)
          return ERR_UNKNOWN_POSITION;
       }
       // do actual moving
-	  int ret = Kinesis_API::SetPosition(serialNumber_.c_str(), pos * stepAngle_, g_move_timeout);
+		int ret = Kinesis_SetPosition(pos * stepAngle_, g_move_timeout);
       if (ret != 0){
-		  return ret;
+			return ret;
       }
-	  position_ = pos;
+		position_ = pos;
    }
 
    return DEVICE_OK;
@@ -274,12 +284,12 @@ int ThorlabsFilterWheel::OnSpeed(MM::PropertyBase* pProp, MM::ActionType eAct)
       }
       // do actual speed change here!
       //
-	  int ret = Kinesis_API::SetSpeed(serialNumber_.c_str(), speed);
-	  if (ret != 0){ // error handling for speed change not implemented yet
-		  LogMessage("Failed to set speed with error code " + std::to_string((long long)ret));
-		  return ret;
-	  }
-      speed_ = speed;
+		int ret = Kinesis_SetSpeed(speed);
+		if (ret != 0){ // error handling for speed change not implemented yet
+			LogMessage("Failed to set speed with error code " + std::to_string((long long)ret));
+			return ret;
+		}
+		speed_ = speed;
    }
 
    return DEVICE_OK;
@@ -287,72 +297,93 @@ int ThorlabsFilterWheel::OnSpeed(MM::PropertyBase* pProp, MM::ActionType eAct)
 
 int ThorlabsFilterWheel::OnSerialNumber(MM::PropertyBase* pProp, MM::ActionType eAct)
 {
-    if (eAct == MM::BeforeGet)
-    {
+   if (eAct == MM::BeforeGet)
+   {
 		// property class stores as C-style string
-        pProp->Set(serialNumber_.c_str());
-    }
-    else if (eAct == MM::AfterSet)
-    {
-        if (initialized_)
-        {
-			// gets as string type
-			std::string serialNumber;
-            pProp->Get(serialNumber);
-            serialNumber_ = serialNumber;
-        }
+		// set the property from the current attribute serialNumber_
+      pProp->Set(serialNumber_.c_str());
+   }
+	else if (eAct == MM::AfterSet)
+	{
+		if (initialized_)
+		{
+		// gets serialNumber from property object
+		std::string serialNumber;
+		pProp->Get(serialNumber);
+		serialNumber_ = serialNumber;
+      }
 
-        pProp->Get(serialNumber_);
-    }
+		pProp->Get(serialNumber_);
+   }
 
-    return DEVICE_OK;
+   return DEVICE_OK;
 }
 
+int ThorlabsFilterWheel::OnPollTime(MM::PropertyBase* pProp, MM::ActionType eAct)
+{
+	if (eAct == MM::BeforeGet)
+	{
+	// int polltime = SBC_PollingDuration(serialNumber_.c_str(), 1); // <- implement soon?
+		pProp->Set(polltime_);
+	}
+   else if (eAct == MM::AfterSet)
+   {
+      if (initialized_)
+      {
+         pProp->Set(polltime_);
+         return ERR_POLL_CHANGE_FORBIDDEN;
+      }
+		// revert
+      pProp->Get(polltime_);
+   }
+
+   return DEVICE_OK;
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // Kinesis API commands
 ///////////////////////////////////////////////////////////////////////////////
 
-int __cdecl Kinesis_API::Initialize(const char* serialNumber, int timeout){
+int __cdecl ThorlabsFilterWheel::Kinesis_Initialize(int timeout){
 // find device with serial number
 // Build list of connected device
 	bool deviceFound = 0;
-    if (TLI_BuildDeviceList() == 0)
-    {
-		// get device list size 
-        short n = TLI_GetDeviceListSize();
-        // get BBD serial numbers
-        char serialNos[100];
-        TLI_GetDeviceListByTypeExt(serialNos, 100, 40);
-        // output list of matching devices
-        char *searchContext = nullptr;
-        char *p = strtok_s(serialNos, ",", &searchContext);
-        int i = 0;
-        while (p != nullptr)
-        {
+	if (TLI_BuildDeviceList() == 0)
+	{
+	// get device list size 
+		short n = TLI_GetDeviceListSize();
+		// get BBD serial numbers
+		char serialNos[100];
+		TLI_GetDeviceListByTypeExt(serialNos, 100, 40);
+		// output list of matching devices
+		char *searchContext = nullptr;
+		// split devices into tokens by comma
+		char *p = strtok_s(serialNos, ",", &searchContext);
+		int i = 0;
+		while (p != nullptr)
+		{
 			TLI_DeviceInfo deviceInfo;
-            // get device info from device
-            TLI_GetDeviceInfo(p, &deviceInfo);
-            // get strings from device info structure
-            char desc[65];
-            strncpy_s(desc, deviceInfo.description, 64);
-            desc[64] = '\0';
-            char serialNo[9];
-            strncpy_s(serialNo, deviceInfo.serialNo, 8);
-            serialNo[8] = '\0';
+			// get device info from device
+			TLI_GetDeviceInfo(p, &deviceInfo);
+			// get strings from device info structure
+			char desc[65];
+			strncpy_s(desc, deviceInfo.description, 64);
+			desc[64] = '\0';
+			char serialNo[9];
+			strncpy_s(serialNo, deviceInfo.serialNo, 8);
+			serialNo[8] = '\0';
 			printf("serialNo %s\n", serialNo);
-			printf("serialNumber %s\n", serialNumber);
-            // safer to use strncmp? Think about str lengths
-            if(strncmp(serialNo, serialNumber, 8) == 0){
+			printf("serialNumber %s\n", serialNumber_.c_str());
+         // safer to use strncmp? Think about str lengths
+         if(strncmp(serialNo, serialNumber_.c_str(), 8) == 0){
 				printf("Found Device %s! : %s\r\n", serialNo, desc);
 				deviceFound = 1;
-            }
-            // output
-            // next token in list
-            p = strtok_s(nullptr, ",", &searchContext);
-
-        }
-    }
+         }
+         // next token in list
+         p = strtok_s(nullptr, ",", &searchContext);
+		}
+	}
+	// replace these with LogMessage sometime
 	printf("bool %d\n", deviceFound);
 	if (deviceFound) {
 		printf("device bool is true\n");
@@ -362,25 +393,25 @@ int __cdecl Kinesis_API::Initialize(const char* serialNumber, int timeout){
 		return DEVICE_NOT_CONNECTED;
     }
    // open device
-   if(SBC_Open(serialNumber) == 0)
+   if(SBC_Open(serialNumber_.c_str()) == 0)
    {
-      // start the device polling at 200ms intervals
-      SBC_StartPolling(serialNumber, 1, 200);
+		// start the device polling at [polltime_]ms intervals
+		SBC_StartPolling(serialNumber_.c_str(), 1, polltime_);
 
-      // enable device so that it can move
-      SBC_EnableChannel(serialNumber, 1);
+		// enable device so that it can move
+		SBC_EnableChannel(serialNumber_.c_str(), 1);
 
-      Sleep(3000);
-      // Home device
-      Kinesis_API::Home(serialNumber);
+		Sleep(3000);
+		// Home device
+		Kinesis_Home();
 
-      // wait for completion
-	  bool complete = 0;
-	  int timeoutCounter = 0;
-	  while(!complete)
+		// wait for completion
+			bool complete = 0;
+			int timeoutCounter = 0;
+			while(!complete)
 	  {
 		// wait for a message to arrive
-		while(SBC_MessageQueueSize(serialNumber, 1) == 0)
+		while(SBC_MessageQueueSize(serialNumber_.c_str(), 1) == 0)
 		{
 			if (timeoutCounter * 100 > timeout){
 				return ERR_HOME_TIMEOUT;
@@ -392,7 +423,7 @@ int __cdecl Kinesis_API::Initialize(const char* serialNumber, int timeout){
 		WORD messageType;
 		WORD messageId;
 		DWORD messageData;
-		SBC_GetNextMessage(serialNumber, 1, &messageType, &messageId, &messageData);
+		SBC_GetNextMessage(serialNumber_.c_str(), 1, &messageType, &messageId, &messageData);
 		complete = (messageType == 2 || messageId == 1);
 	  }
    }
@@ -400,35 +431,35 @@ int __cdecl Kinesis_API::Initialize(const char* serialNumber, int timeout){
    return DEVICE_OK;
 }
 
-int __cdecl Kinesis_API::Home(const char* serialNumber){
+int __cdecl ThorlabsFilterWheel::Kinesis_Home(){
    // Home device
-   SBC_ClearMessageQueue(serialNumber, 1);
-   SBC_Home(serialNumber, 1);
-   printf("Device %s homing\r\n", serialNumber);
+   SBC_ClearMessageQueue(serialNumber_.c_str(), 1);
+   SBC_Home(serialNumber_.c_str(), 1);
+   printf("Device %s homing\r\n", serialNumber_.c_str());
    return 0;
 }
 
-int __cdecl Kinesis_API::SetPosition(const char* serialNumber, double position, int timeout){
+int __cdecl ThorlabsFilterWheel::Kinesis_SetPosition(double position, int timeout){
    // move to position  (degrees) (channel 1)
-   SBC_ClearMessageQueue(serialNumber, 1);
+   SBC_ClearMessageQueue(serialNumber_.c_str(), 1);
 
-   int move_ret = SBC_MoveToPosition(serialNumber, 1, position*g_real_to_device_units);
+   int move_ret = SBC_MoveToPosition(serialNumber_.c_str(), 1, position*g_real_to_device_units);
    if (move_ret != 0){
-	   printf("Device %s failed to move\r\n", serialNumber);
+	   printf("Device %s failed to move\r\n", serialNumber_.c_str());
 	   return move_ret;
    }
 
    
-   printf("Device %s moving\r\n", serialNumber);
+   printf("Device %s moving\r\n", serialNumber_.c_str());
 
    // wait for completion
-	bool complete = 0;
-	int timeoutCounter = 0;
-	while(!complete)
-	{
-	// wait for a message to arrive
-	while(SBC_MessageQueueSize(serialNumber, 1) == 0)
-	{
+   bool complete = 0;
+   int timeoutCounter = 0;
+   while(!complete)
+   {
+   // wait for a message to arrive
+   while(SBC_MessageQueueSize(serialNumber_.c_str(), 1) == 0)
+   {
 		// time counter * 10ms
 		if (timeoutCounter * 10 > timeout){
 			return ERR_MOVE_TIMEOUT;
@@ -436,25 +467,28 @@ int __cdecl Kinesis_API::SetPosition(const char* serialNumber, double position, 
 		Sleep(10);
 		timeoutCounter++;
 			
-	}
-	WORD messageType;
-	WORD messageId;
-	DWORD messageData;
-	SBC_GetNextMessage(serialNumber, 1, &messageType, &messageId, &messageData);
-	complete = (messageType == 2 || messageId == 1);
-	}
-	printf("Time taken to move: %d\r\n", timeoutCounter * 10); 
-	// get actual position
-	double pos = SBC_GetPosition(serialNumber, 1);
-	printf("Device %s moved to %d\r\n", serialNumber, (int)(pos/g_real_to_device_units) );
-	return DEVICE_OK;
+   }
+   WORD messageType;
+   WORD messageId;
+   DWORD messageData;
+   SBC_GetNextMessage(serialNumber_.c_str(), 1, &messageType, &messageId, &messageData);
+   complete = (messageType == 2 || messageId == 1);
+   }
+   printf("Time taken to move: %d\r\n", timeoutCounter * 10); 
+   // get actual position
+	// using request and getposition for robustness
+	SBC_RequestPosition(serialNumber_.c_str(), 1);
+	Sleep(polltime_ + 10);
+   double pos = SBC_GetPosition(serialNumber_.c_str(), 1);
+   printf("Device %s moved to %d\r\n", serialNumber_.c_str(), (int)(pos/g_real_to_device_units) );
+   return DEVICE_OK;
 }
 
 
-double __cdecl Kinesis_API::GetSpeed(const char* serialNumber){
+double __cdecl ThorlabsFilterWheel::Kinesis_GetSpeed(){
    int currentVelocity, currentAcceleration;
    int ret;
-   ret = SBC_GetVelParams(serialNumber, 1, &currentAcceleration, &currentVelocity);
+   ret = SBC_GetVelParams(serialNumber_.c_str(), 1, &currentAcceleration, &currentVelocity);
    if (ret != 0){
 	   return ret;
    }
@@ -462,33 +496,35 @@ double __cdecl Kinesis_API::GetSpeed(const char* serialNumber){
    return currentVelocity/g_real_to_device_speed_units;
 }
 
-int __cdecl Kinesis_API::SetSpeed(const char* serialNumber, int speed){
+int __cdecl ThorlabsFilterWheel::Kinesis_SetSpeed(int speed){
    // value handling done at higher level (Thorlabs State Device)
    if(speed > 0)
    {
-	  speed *= g_real_to_device_speed_units;
-      int currentVelocity, currentAcceleration;
-      int ret, retset;
-	  ret = SBC_GetVelParams(serialNumber, 1, &currentAcceleration, &currentVelocity);
-	  retset = SBC_SetVelParams(serialNumber, 1, currentAcceleration, speed);
-	  if (ret){
-		return ret;
-	  }
+		speed *= g_real_to_device_speed_units;
+		int currentVelocity, currentAcceleration;
+		int ret, retset;
+		ret = SBC_GetVelParams(serialNumber_.c_str(), 1, &currentAcceleration, &currentVelocity);
+		retset = SBC_SetVelParams(serialNumber_.c_str(), 1, currentAcceleration, speed);
+		if (ret){
+			return ret;
+		}
       else if (retset != 0){
-      return retset;
+			return retset;
       }
    }
    return DEVICE_OK;
 }
 
-int __cdecl Kinesis_API::SendCmd(const char* serialNumber){
+int __cdecl ThorlabsFilterWheel::Kinesis_SendCmd(){
    return ERROR_CALL_NOT_IMPLEMENTED;
 }
 
-int Kinesis_API::Shutdown(const char* serialNumber){
-   // stop polling
-   SBC_StopPolling(serialNumber, 1);
+int ThorlabsFilterWheel::Kinesis_Shutdown(){
+	// set back to max speed (default)
+   Kinesis_SetSpeed(maxSpeed_);
+	// stop polling
+   SBC_StopPolling(serialNumber_.c_str(), 1);
    // close device
-   SBC_Close(serialNumber);
+   SBC_Close(serialNumber_.c_str());
    return DEVICE_OK;
 }
