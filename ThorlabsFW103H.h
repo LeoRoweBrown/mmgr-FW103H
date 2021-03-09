@@ -20,7 +20,8 @@
 #define ERR_INVALID_SPEED             101
 #define ERR_MOVE_TIMEOUT              102
 #define ERR_HOME_TIMEOUT		        103
-#define ERR_POLL_CHANGE_FORBIDDEN     104
+#define ERR_MOVE_MSG_TIMEOUT          104
+#define ERR_POLL_CHANGE_FORBIDDEN     105
 
 // CRTP
 class ThorlabsFilterWheel : public CStateDeviceBase<ThorlabsFilterWheel>
@@ -37,6 +38,9 @@ public:
    void GetName(char* pszName) const;
    bool Busy();
    unsigned long GetNumberOfPositions()const {return numPos_;}
+   
+   // util
+   int Round(double number);
 
    // action interface
    // ----------------

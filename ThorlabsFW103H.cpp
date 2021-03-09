@@ -34,6 +34,7 @@ const int g_move_timeout = 5000;  // timeout in ms for moving wheel positions
 const double g_real_to_device_units = 7.0/9.0 + 1137;
 const double g_real_to_device_speed_units = 61083.979375;
 const int g_default_poll = 100; // device poll time in ms
+const int g_general_timeout = 10000;
 
 ///////////////////////////////////////////////////////////////////////////////
 // Exported MMDevice API
@@ -85,7 +86,8 @@ ThorlabsFilterWheel::ThorlabsFilterWheel() ://char* SerialNumber) :
 
    SetErrorText(ERR_UNKNOWN_POSITION, "Invalid filter wheel position.");
    SetErrorText(ERR_INVALID_SPEED, "Invalid filter wheel speed.");
-	SetErrorText(ERR_MOVE_TIMEOUT, "Timed out during move command.");
+	SetErrorText(ERR_MOVE_TIMEOUT, "Timed out waiting to move to expected position - wheel speed may be too slow.");
+   SetErrorText(ERR_MOVE_MSG_TIMEOUT, "Timed out waiting for message response after issuing move command.");
 	SetErrorText(ERR_HOME_TIMEOUT, "Timed out during home command.");
 	SetErrorText(ERR_POLL_CHANGE_FORBIDDEN, "Poll time change forbidden");
 
@@ -159,7 +161,7 @@ int ThorlabsFilterWheel::Initialize()
 	ret = CreateProperty(MM::g_Keyword_Speed, CDeviceUtils::ConvertToString(maxSpeed_), MM::Integer, false, pAct);
 	if (ret != DEVICE_OK)
 		return ret;
-	SetPropertyLimits(MM::g_Keyword_Speed, 0, maxSpeed_);
+	SetPropertyLimits(MM::g_Keyword_Speed, 1, maxSpeed_);
 
 	// Label
 	// -----
@@ -344,7 +346,7 @@ int ThorlabsFilterWheel::OnPollTime(MM::PropertyBase* pProp, MM::ActionType eAct
 // Kinesis API commands
 ///////////////////////////////////////////////////////////////////////////////
 
-int __cdecl ThorlabsFilterWheel::Kinesis_Initialize(int timeout){
+int ThorlabsFilterWheel::Kinesis_Initialize(int timeout){
 // find device with serial number
 // Build list of connected device
 	bool deviceFound = 0;
@@ -431,7 +433,7 @@ int __cdecl ThorlabsFilterWheel::Kinesis_Initialize(int timeout){
    return DEVICE_OK;
 }
 
-int __cdecl ThorlabsFilterWheel::Kinesis_Home(){
+int ThorlabsFilterWheel::Kinesis_Home(){
    // Home device
    SBC_ClearMessageQueue(serialNumber_.c_str(), 1);
    SBC_Home(serialNumber_.c_str(), 1);
@@ -439,8 +441,14 @@ int __cdecl ThorlabsFilterWheel::Kinesis_Home(){
    return 0;
 }
 
-int __cdecl ThorlabsFilterWheel::Kinesis_SetPosition(double position, int timeout){
+int ThorlabsFilterWheel::Kinesis_SetPosition(double position, int timeout){
    // move to position  (degrees) (channel 1)
+   double pos_start = SBC_GetPosition(serialNumber_.c_str(), 1);
+   // estimate how long we should give the wheel to move to the correct pos
+   int move_dist = Round(pos_start/g_real_to_device_units);
+   int expected_time_ms = 1000*Round((double)move_dist/(double)speed_);
+   int calculated_move_timeout = 2*expected_time_ms + polltime_;  // a bit arbitrary
+   
    SBC_ClearMessageQueue(serialNumber_.c_str(), 1);
 
    int move_ret = SBC_MoveToPosition(serialNumber_.c_str(), 1, position*g_real_to_device_units);
@@ -457,35 +465,57 @@ int __cdecl ThorlabsFilterWheel::Kinesis_SetPosition(double position, int timeou
    int timeoutCounter = 0;
    while(!complete)
    {
-   // wait for a message to arrive
-   while(SBC_MessageQueueSize(serialNumber_.c_str(), 1) == 0)
-   {
-		// time counter * 10ms
-		if (timeoutCounter * 10 > timeout){
-			return ERR_MOVE_TIMEOUT;
-		}
-		Sleep(10);
-		timeoutCounter++;
+      // wait for a message to arrive
+      while(SBC_MessageQueueSize(serialNumber_.c_str(), 1) == 0)
+      {
+		   // time counter * 10ms
+		   if (timeoutCounter * 10 > timeout){
+			   return ERR_MOVE_MSG_TIMEOUT;
+		   }
+		   Sleep(10);
+		   timeoutCounter++;
 			
+      }
+      WORD messageType;
+      WORD messageId;
+      DWORD messageData;
+      SBC_GetNextMessage(serialNumber_.c_str(), 1, &messageType, &messageId, &messageData);
+      complete = (messageType == 2 || messageId == 1);
+      // printf("Message data: %lu \n", messageData);
+      // printf("after getting message queue is %d msg long \n", SBC_MessageQueueSize(serialNumber_.c_str(), 1));
    }
-   WORD messageType;
-   WORD messageId;
-   DWORD messageData;
-   SBC_GetNextMessage(serialNumber_.c_str(), 1, &messageType, &messageId, &messageData);
-   complete = (messageType == 2 || messageId == 1);
+   int moveTimeoutCounter = 0;
+   SBC_RequestPosition(serialNumber_.c_str(), 1);
+	Sleep(polltime_); //
+   double pos = SBC_GetPosition(serialNumber_.c_str(), 1);
+   while(Round((double)(pos/g_real_to_device_units)) != Round(position)){
+      SBC_RequestPosition(serialNumber_.c_str(), 1);
+      Sleep(polltime_);
+      moveTimeoutCounter++;
+      pos = SBC_GetPosition(serialNumber_.c_str(), 1);
+      // maybe replace timeout with calculated time
+
+      if (timeoutCounter * 10 > g_general_timeout || timeoutCounter * 10 > calculated_move_timeout){
+	      return ERR_MOVE_TIMEOUT;
+		}
    }
-   printf("Time taken to move: %d\r\n", timeoutCounter * 10); 
+
+   printf("Time taken to move: %d\r\n", (timeoutCounter + moveTimeoutCounter) * 10); 
    // get actual position
 	// using request and getposition for robustness
-	SBC_RequestPosition(serialNumber_.c_str(), 1);
-	Sleep(polltime_ + 10);
-   double pos = SBC_GetPosition(serialNumber_.c_str(), 1);
-   printf("Device %s moved to %d\r\n", serialNumber_.c_str(), (int)(pos/g_real_to_device_units) );
+   // Sleep(200); // DEFINITELY make sure it's moving in time
+	// SBC_RequestPosition(serialNumber_.c_str(), 1);
+	// Sleep(polltime_); //
+   
+   // double pos = SBC_GetPosition(serialNumber_.c_str(), 1);
+   printf("Device %s moved to %d ", serialNumber_.c_str(), Round((double)(pos/g_real_to_device_units)) );
+   printf("at poll speed of %d ms\r\n", SBC_PollingDuration(serialNumber_.c_str(), 1));
+   
    return DEVICE_OK;
 }
 
 
-double __cdecl ThorlabsFilterWheel::Kinesis_GetSpeed(){
+double ThorlabsFilterWheel::Kinesis_GetSpeed(){
    int currentVelocity, currentAcceleration;
    int ret;
    ret = SBC_GetVelParams(serialNumber_.c_str(), 1, &currentAcceleration, &currentVelocity);
@@ -496,7 +526,7 @@ double __cdecl ThorlabsFilterWheel::Kinesis_GetSpeed(){
    return currentVelocity/g_real_to_device_speed_units;
 }
 
-int __cdecl ThorlabsFilterWheel::Kinesis_SetSpeed(int speed){
+int ThorlabsFilterWheel::Kinesis_SetSpeed(int speed){
    // value handling done at higher level (Thorlabs State Device)
    if(speed > 0)
    {
@@ -515,7 +545,7 @@ int __cdecl ThorlabsFilterWheel::Kinesis_SetSpeed(int speed){
    return DEVICE_OK;
 }
 
-int __cdecl ThorlabsFilterWheel::Kinesis_SendCmd(){
+int ThorlabsFilterWheel::Kinesis_SendCmd(){
    return ERROR_CALL_NOT_IMPLEMENTED;
 }
 
@@ -527,4 +557,9 @@ int ThorlabsFilterWheel::Kinesis_Shutdown(){
    // close device
    SBC_Close(serialNumber_.c_str());
    return DEVICE_OK;
+}
+
+// Utils
+int ThorlabsFilterWheel::Round(double number){
+   return (int)floor(number + 0.5);
 }
