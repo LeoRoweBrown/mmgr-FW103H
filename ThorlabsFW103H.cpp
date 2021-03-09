@@ -448,6 +448,7 @@ int ThorlabsFilterWheel::Kinesis_SetPosition(double position, int timeout){
    int move_dist = Round(pos_start/g_real_to_device_units);
    int expected_time_ms = 1000*Round((double)move_dist/(double)speed_);
    int calculated_move_timeout = 2*expected_time_ms + polltime_;  // a bit arbitrary
+   printf("Move timeout %d\n", calculated_move_timeout);
    
    SBC_ClearMessageQueue(serialNumber_.c_str(), 1);
 
@@ -470,6 +471,7 @@ int ThorlabsFilterWheel::Kinesis_SetPosition(double position, int timeout){
       {
 		   // time counter * 10ms
 		   if (timeoutCounter * 10 > timeout){
+            printf("Error responding in time\n");
 			   return ERR_MOVE_MSG_TIMEOUT;
 		   }
 		   Sleep(10);
@@ -495,7 +497,8 @@ int ThorlabsFilterWheel::Kinesis_SetPosition(double position, int timeout){
       pos = SBC_GetPosition(serialNumber_.c_str(), 1);
       // maybe replace timeout with calculated time
 
-      if (timeoutCounter * 10 > g_general_timeout || timeoutCounter * 10 > calculated_move_timeout){
+      if (moveTimeoutCounter * 10 > g_general_timeout || moveTimeoutCounter * 10 > calculated_move_timeout){
+         printf("Error moving in time\n");
 	      return ERR_MOVE_TIMEOUT;
 		}
    }
