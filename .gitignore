@@ -32,4 +32,4 @@
 *.app
 
 *.sdf
-./build/intermediates
+build/intermediates/
