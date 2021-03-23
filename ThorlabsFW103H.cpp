@@ -495,8 +495,8 @@ int ThorlabsFilterWheel::Kinesis_SetPosition(double position, int timeout){
       Sleep(polltime_);
       moveTimeoutCounter++;
       pos = SBC_GetPosition(serialNumber_.c_str(), 1);
-      // maybe replace timeout with calculated time
 
+      // use calculated time as timeout
       if (moveTimeoutCounter * 10 > g_general_timeout || moveTimeoutCounter * 10 > calculated_move_timeout){
          printf("Error moving in time\n");
 	      return ERR_MOVE_TIMEOUT;
@@ -504,13 +504,6 @@ int ThorlabsFilterWheel::Kinesis_SetPosition(double position, int timeout){
    }
 
    printf("Time taken to move: %d\r\n", (timeoutCounter + moveTimeoutCounter) * 10); 
-   // get actual position
-	// using request and getposition for robustness
-   // Sleep(200); // DEFINITELY make sure it's moving in time
-	// SBC_RequestPosition(serialNumber_.c_str(), 1);
-	// Sleep(polltime_); //
-   
-   // double pos = SBC_GetPosition(serialNumber_.c_str(), 1);
    printf("Device %s moved to %d ", serialNumber_.c_str(), Round((double)(pos/g_real_to_device_units)) );
    printf("at poll speed of %d ms\r\n", SBC_PollingDuration(serialNumber_.c_str(), 1));
    
